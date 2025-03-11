@@ -1,4 +1,7 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import HTMLResponse
+from fastapi.staticfiles import StaticFiles
+from fastapi.templating import Jinja2Templates
 import warnings
 from datasets import load_dataset
 from pinecone_text.sparse import BM25Encoder
@@ -9,11 +12,20 @@ from tqdm.auto import tqdm
 import torch
 import os
 import nltk
+import base64
+from PIL import Image
+import io
 
 # Suppress warnings
 warnings.filterwarnings('ignore')
 
 app = FastAPI()
+
+# Mount static files for serving images
+app.mount("/static", StaticFiles(directory="static"), name="static")
+
+# Set up Jinja2 templates
+templates = Jinja2Templates(directory="templates")
 
 # Function to setup Pinecone
 def setup_pinecone():
@@ -50,12 +62,18 @@ def create_dense_vector(metadata, device):
     dense_vec = model.encode([metadata['productDisplayName'][0]])
     return dense_vec
 
-@app.get("/")
-def read_root():
-    return {"message": "Welcome to the Fashion Product Search API!"}
+# Function to convert image to base64 for HTML display
+def image_to_base64(image):
+    buffered = io.BytesIO()
+    image.save(buffered, format="JPEG")
+    return base64.b64encode(buffered.getvalue()).decode()
 
-@app.get("/process")
-def process_data():
+@app.get("/", response_class=HTMLResponse)
+def read_root(request: Request):
+    return templates.TemplateResponse("index.html", {"request": request})
+
+@app.get("/process", response_class=HTMLResponse)
+def process_data(request: Request):
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     print(f"Using device: {device}")
 
@@ -71,10 +89,16 @@ def process_data():
     bm25 = create_sparse_vector(metadata)
     dense_vec = create_dense_vector(metadata, device)
 
-    return {
+    # Get the first image and convert it to base64
+    image = images[0]
+    image_base64 = image_to_base64(image)
+
+    return templates.TemplateResponse("result.html", {
+        "request": request,
         "product_name": metadata['productDisplayName'][0],
-        "dense_vector_shape": dense_vec.shape
-    }
+        "dense_vector_shape": dense_vec.shape,
+        "image_base64": image_base64
+    })
 
 if __name__ == "__main__":
     import uvicorn
